@@ -1,7 +1,11 @@
-"""Template 1: load corpus -> tokenize -> normalize -> word frequency Counter.
+"""Template 1: load corpus -> clean -> tokenize -> normalize -> word frequency Counter.
 
-Handles: a single .txt file (streamed line by line), a CSV/TSV file (pick a text
-column), or a directory of text files (one global Counter).
+Input is one UTF-8 .txt file (e.g. the Tagalog Wikipedia dump Raw.txt), streamed line by line.
+
+Run directly to write two files next to the input:
+  python load_count.py Raw.txt
+    -> Raw_clean.txt   the text with markup and gibberish lines removed
+    -> Raw_counts.csv  word,count (most frequent first), easy to open in Excel
 
 Tune after seeing the dataset:
   - keep_hyphen   : keep "mag-aral" as one token (True) or split it (False)
@@ -19,7 +23,57 @@ LETTERS = r"A-Za-zÀ-ÖØ-öø-ÿÑñ"
 WORD_RE = re.compile(rf"[{LETTERS}]+")
 WORD_HYPHEN_RE = re.compile(rf"[{LETTERS}]+(?:[-'’][{LETTERS}]+)*")
 
+# ---------------------------------------------------------------- cleaning
+# Wiki leftovers: HTML tags (<br>, <templatestyles ...>), math/code placeholders
+# (formula_12, codice_3), URLs, HTML entities (&nbsp;) and stray [[ ]] {{ }}.
+MARKUP_RE = re.compile(r"<[^>]*>|\b(?:formula|codice)_\d+\b|https?://\S+|&[a-z]+;|\[\[|\]\]|\{\{|\}\}")
+TABLE_STARTS = ("{|", "|", "!")          # wikitable rows like  !rowspan="1" align="center"|Upuan
+MIN_LETTER_SHARE = 0.6                   # below this the line is mostly symbols, IPA, formulas or another script
+TAGALOG_MARKERS = frozenset("ang ng sa na mga si ay at ni nang kay ito siya noong".split())
+MARKER_CHECK_WORDS = 6                   # long lines without any marker are another language
 
+
+def clean_line(line):
+    """Return the line with markup removed, or None if the line is junk."""
+    line = " ".join(MARKUP_RE.sub(" ", line).split())
+    if not line or line.startswith(TABLE_STARTS):
+        return None
+    words = WORD_RE.findall(line)
+    if not words:
+        return None                      # "2017", "1922:", " ],"
+    letters = sum(map(len, words))
+    others = sum(1 for c in line if not c.isspace() and not c.isdigit()) - letters  # digits are fine: years, dates
+    if letters / (letters + others) < MIN_LETTER_SHARE:
+        return None
+    if len(words) >= MARKER_CHECK_WORDS and not TAGALOG_MARKERS & {w.lower() for w in words}:
+        return None                      # language lists, Hawaiian/Polish examples, English-only lines
+    return line
+
+
+def _iter_lines(path):
+    """Yield the cleaned, non-junk lines of a UTF-8 text file."""
+    with open(path, encoding="utf-8", errors="ignore") as f:
+        for raw in f:
+            line = clean_line(raw)
+            if line:
+                yield line
+
+
+def clean_file(path, out_path):
+    """Write the cleaned text to out_path. Returns (lines_in, lines_kept)."""
+    total = kept = 0
+    with open(path, encoding="utf-8", errors="ignore") as f, \
+            open(out_path, "w", encoding="utf-8", newline="\n") as out:
+        for raw in f:
+            total += 1
+            line = clean_line(raw)
+            if line:
+                kept += 1
+                out.write(line + "\n")
+    return total, kept
+
+
+# ---------------------------------------------------------------- counting
 def strip_accents(token):
     """Remove accent marks but keep ñ (a separate letter in Filipino)."""
     out = []
@@ -32,7 +86,7 @@ def strip_accents(token):
     return "".join(out)
 
 
-def tokenize(text, lower=True, keep_hyphen=False, fold_accents=False):
+def tokenize(text, lower=True, keep_hyphen=False, fold_accents=True):
     rx = WORD_HYPHEN_RE if keep_hyphen else WORD_RE
     for tok in rx.findall(text):
         if lower:
@@ -42,33 +96,20 @@ def tokenize(text, lower=True, keep_hyphen=False, fold_accents=False):
         yield tok
 
 
-def _iter_lines(path, csv_column=None, delimiter=","):
-    path = Path(path)
-    if path.is_dir():
-        for p in sorted(path.rglob("*")):
-            if p.is_file() and p.suffix.lower() in {".txt", ".text", ".corpus", ".md"}:
-                with p.open(encoding="utf-8", errors="ignore") as f:
-                    yield from f
-        return
-    if csv_column is not None:
-        with path.open(encoding="utf-8-sig", errors="ignore", newline="") as f:
-            reader = csv.DictReader(f, delimiter=delimiter)
-            if csv_column not in (reader.fieldnames or []):
-                sys.exit(f"Column {csv_column!r} not found. Columns: {reader.fieldnames}")
-            for row in reader:
-                yield row.get(csv_column) or ""
-        return
-    with path.open(encoding="utf-8", errors="ignore") as f:
-        yield from f
-
-
-def load_counts(path, lower=True, keep_hyphen=False, fold_accents=False,
-                csv_column=None, delimiter=","):
-    """Stream the input and return a Counter of tokens (raw corpus is never held in RAM)."""
+def load_counts(path, lower=True, keep_hyphen=False, fold_accents=True):
+    """Stream the (cleaned) input and return a Counter of tokens (raw corpus is never held in RAM)."""
     counts = Counter()
-    for line in _iter_lines(path, csv_column, delimiter):
+    for line in _iter_lines(path):
         counts.update(tokenize(line, lower, keep_hyphen, fold_accents))
     return counts
+
+
+def write_counts_csv(counts, out_path, encoding="utf-8-sig"):
+    """word,count sorted by count (ties alphabetical). utf-8-sig so Excel shows ñ/á correctly."""
+    with open(out_path, "w", encoding=encoding, newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["word", "count"])
+        w.writerows(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
 def filter_vocab(counts, min_count=1, min_len=3, stopwords=frozenset()):
@@ -92,3 +133,17 @@ def load_words(path, lower=True, encoding="utf-8"):
 
 def count_words(words, min_len=3, stopwords=frozenset()):
     return Counter(w for w in words if len(w) >= min_len and w not in stopwords)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        sys.exit("usage: python load_count.py Raw.txt")
+    src = Path(sys.argv[1])
+    clean_path = src.with_name(src.stem + "_clean.txt")
+    counts_path = src.with_name(src.stem + "_counts.csv")
+
+    total, kept = clean_file(src, clean_path)
+    print(f"[clean] kept {kept:,} of {total:,} lines -> {clean_path}")
+    counts = load_counts(clean_path)
+    write_counts_csv(counts, counts_path)
+    print(f"[count] {sum(counts.values()):,} tokens, {len(counts):,} distinct words -> {counts_path}")
