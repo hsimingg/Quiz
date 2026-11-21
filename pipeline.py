@@ -16,8 +16,10 @@ Typical quiz-day runs
   python pipeline.py data.txt --mode edit --mine            # explore: what differences occur?
   python pipeline.py data.txt -o Variants.csv               # rules mode (default: paper rules), edit distance 1
   python pipeline.py data.txt --rules paper,loan            # add loanword rules if the data has them
+  python pipeline.py data.txt --rules paper,hyphen,apostrophe   # + pag-ibig~pagibig, iba't~ibat
   python pipeline.py data.txt --max-edits 2 --rules paper,loan,loose --extra
-  python pipeline.py corpus_dir/ --groups groups.csv --features features.csv
+  python load_count.py Raw.txt  then  python pipeline.py Raw_counts.csv   # count once, rerun fast
+  python pipeline.py data.txt --groups groups.csv --features features.csv
 """
 import argparse
 import csv
@@ -25,7 +27,7 @@ import sys
 import time
 from collections import Counter
 
-from load_count import load_counts, filter_vocab, load_stopwords
+from load_count import load_counts, read_counts_csv, filter_vocab, load_stopwords
 from candidates import candidate_pairs
 from edit1 import edit1_diff, position_of
 from levenshtein import bounded_levenshtein, distance, levenshtein, character_difference
@@ -56,12 +58,19 @@ def timed(label):
 
 @timed("find_variants")
 def find_variants(counts, vocab, max_edits=1, mode="rules", rules=None,
-                  min_ngram=0.0, order="freq", min_key_len=2, max_bucket=3000, adhere_min=61.0):
+                  min_ngram=0.0, order="freq", min_key_len=2, max_bucket=3000, adhere_min=61.0,
+                  skip_reduplicated=True):
     rules = rules if rules is not None else get_rules("paper")
-    stats = {}
-    cands = candidate_pairs(vocab, max_edits, min_key_len, max_bucket, stats)
-    log(f"[candidates] {stats}")
-    rp = rule_pairs(vocab, rules) if (mode == "rules" and rules) else {}
+    if mode == "rules":
+        # rule_pairs already finds every pair a rule explains (any edit distance), so the
+        # edit-distance candidates would add nothing here - skip them.
+        cands = set()
+        rp = rule_pairs(vocab, rules, skip_reduplicated) if rules else {}
+    else:
+        stats = {}
+        cands = candidate_pairs(vocab, max_edits, min_key_len, max_bucket, stats)
+        log(f"[candidates] {stats}")
+        rp = {}
     log(f"[find_variants] vocab={len(vocab)} candidates={len(cands)} rule-generated={len(rp)}")
 
     rows = []
@@ -74,7 +83,7 @@ def find_variants(counts, vocab, max_edits=1, mode="rules", rules=None,
             d = d if 0 < d <= max_edits else None
         rule = rp.get((a, b))
         if rule is None and d is not None and rules:
-            rule = match_rule(a, b, rules)
+            rule = match_rule(a, b, rules, skip_reduplicated)
         if mode == "edit" and d is None:
             continue
         if mode == "rules" and rule is None:
@@ -150,7 +159,7 @@ def demo():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("input", nargs="?", help="text file (Raw.txt)")
+    ap.add_argument("input", nargs="?", help="text file (Raw.txt) or word,count CSV (Raw_counts.csv)")
     ap.add_argument("-o", "--output", default="Variants.csv")
     ap.add_argument("--demo", action="store_true")
     # input / normalization
@@ -166,7 +175,10 @@ def main():
     ap.add_argument("--max-edits", type=int, choices=[1, 2], default=1)
     ap.add_argument("--mode", choices=["rules", "edit"], default="rules",
                     help="rules = only rule-explained pairs (precision); edit = every pair within --max-edits (recall)")
-    ap.add_argument("--rules", default="paper", help="comma list of: paper, loan, loose ('' = none)")
+    ap.add_argument("--rules", default="paper",
+                    help="comma list of: paper, hyphen, apostrophe, loan, loan_safe, loose ('' = none)")
+    ap.add_argument("--keep-reduplicated", dest="skip_reduplicated", action="store_false",
+                    help="also pair hyphenated reduplications (araw-araw ~ arawaraw); skipped by default")
     ap.add_argument("--min-ngram", type=float, default=0.0, help="optional 3/4-gram similarity floor (0-1)")
     ap.add_argument("--adhere-min", type=float, default=61.0, help="%% share for adhering_vs_deviating")
     ap.add_argument("--max-bucket", type=int, default=3000)
@@ -186,13 +198,19 @@ def main():
         ap.error("input is required (or use --demo)")
 
     t0 = time.perf_counter()
-    counts = load_counts(args.input, keep_hyphen=args.keep_hyphen, fold_accents=args.strip_accents)
+    if args.input.lower().endswith(".csv"):
+        # word,count file from load_count.py: already tokenized, so --split-hyphen /
+        # --strip-accents do nothing here (rebuild the CSV to change them)
+        counts = read_counts_csv(args.input)
+    else:
+        counts = load_counts(args.input, keep_hyphen=args.keep_hyphen, fold_accents=args.strip_accents)
     vocab = filter_vocab(counts, args.min_count, args.min_len, load_stopwords(args.stopwords))
     log(f"[load] tokens={sum(counts.values())} types={len(counts)} vocab_used={len(vocab)} "
         f"({time.perf_counter() - t0:.2f}s)")
 
     rows = find_variants(counts, vocab, args.max_edits, args.mode, get_rules(args.rules),
-                         args.min_ngram, args.order, args.min_key_len, args.max_bucket, args.adhere_min)
+                         args.min_ngram, args.order, args.min_key_len, args.max_bucket, args.adhere_min,
+                         args.skip_reduplicated)
     write_csv(rows, args.output, REQUIRED + (EXTRA if args.extra else []), args.encoding)
     log(f"[done] {len(rows)} pairs -> {args.output}")
 
