@@ -12,10 +12,13 @@ Rule sets - pick with pipeline.py --rules paper,hyphen,apostrophe
                (don't, we'll, actor's) and names (d'italia).
   loan       : Spanish/English loanword spellings (c/k, f/p, ñ/ny ...). OFF by default:
                context-free f/p, j/h, z/s, v/b also pair English words (pan/fan, ham/jam)
+  loan_safe  : loan rules with context only (c/k, qu/k, ll/ly, ñ/ny, x/ks, ch/ts); no f/p, v/b,
+               j/h, z/s. Still catches a few names (cabo~kabo, niño~ninyo). Don't combine with loan.
   loose      : context-free e/i, o/u, doubled vowels -> high recall, more false positives
 
 Reduplication (araw-araw, kagalang-galang) is grammatical, not spelling, and the paper excludes it.
-Pass skip_reduplicated=True to match_rule / rule_pairs to drop those pairs.
+Pass skip_reduplicated=True to match_rule / rule_pairs to drop those pairs. pipeline.py does this
+by default (--keep-reduplicated turns it off).
 
 Quiz-day workflow: run pipeline.py --mode edit --mine, look at the most frequent
 cdiff patterns, then add/remove rules here.   Self-test:  python rules.py
