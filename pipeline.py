@@ -14,7 +14,7 @@ REQUIRED OUTPUT: word1, word2, word1_count, word2_count, character_difference
 Typical quiz-day runs
   python pipeline.py --demo
   python pipeline.py data.txt --mode edit --mine            # explore: what differences occur?
-  python pipeline.py data.txt -o Variants.csv               # rules mode (default: paper rules), edit distance 1
+  python pipeline.py data.txt -o Variants.csv               # rules mode (default: paper rules), any edit distance
   python pipeline.py data.txt --rules paper,loan            # add loanword rules if the data has them
   python pipeline.py data.txt --rules paper,hyphen,apostrophe   # + pag-ibig~pagibig, iba't~ibat
   python pipeline.py data.txt --max-edits 2 --rules paper,loan,loose --extra
@@ -166,13 +166,17 @@ def main():
     ap.add_argument("--split-hyphen", dest="keep_hyphen", action="store_false",
                     help="split mag-aral and ma'am into parts (default keeps internal hyphens/apostrophes)")
     ap.set_defaults(keep_hyphen=True)
-    ap.add_argument("--strip-accents", action="store_true", help="fold á->a (ñ kept)")
+    ap.add_argument("--keep-accents", dest="strip_accents", action="store_false",
+                    help="keep á, é ... as written (default folds á->a, ñ always kept; same as load_count.py)")
+    ap.set_defaults(strip_accents=True)
     ap.add_argument("--min-count", type=int, default=3, help="ignore words rarer than this (3 keeps known positives)")
     ap.add_argument("--min-len", type=int, default=3, help="ignore words shorter than this")
     ap.add_argument("--stopwords", help="file with one word per line to ignore")
     # algorithm
     ap.add_argument("--min-key-len", type=int, default=2)
-    ap.add_argument("--max-edits", type=int, choices=[1, 2], default=1)
+    ap.add_argument("--max-edits", type=int, choices=[1, 2], default=1,
+                    help="edit mode: keep pairs within this distance. rules mode: no effect on which pairs "
+                         "are found (rules work at any distance; see the edit_distance column)")
     ap.add_argument("--mode", choices=["rules", "edit"], default="rules",
                     help="rules = only rule-explained pairs (precision); edit = every pair within --max-edits (recall)")
     ap.add_argument("--rules", default="paper",
@@ -196,11 +200,13 @@ def main():
         return demo()
     if not args.input:
         ap.error("input is required (or use --demo)")
+    if args.mode == "rules" and not get_rules(args.rules):
+        ap.error("--mode rules needs at least one rule set (or use --mode edit)")
 
     t0 = time.perf_counter()
     if args.input.lower().endswith(".csv"):
         # word,count file from load_count.py: already tokenized, so --split-hyphen /
-        # --strip-accents do nothing here (rebuild the CSV to change them)
+        # --keep-accents do nothing here (rebuild the CSV to change them)
         counts = read_counts_csv(args.input)
     else:
         counts = load_counts(args.input, keep_hyphen=args.keep_hyphen, fold_accents=args.strip_accents)
