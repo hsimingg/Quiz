@@ -22,15 +22,13 @@ from pathlib import Path
 LETTERS = r"A-Za-zÀ-ÖØ-öø-ÿÑñ"
 WORD_RE = re.compile(rf"[{LETTERS}]+")
 WORD_HYPHEN_RE = re.compile(rf"[{LETTERS}]+(?:[-'’][{LETTERS}]+)*")
-# Whole alphanumeric drops
-RUN_RE = re.compile(rf"[{LETTERS}0-9]+")
-RUN_HYPHEN_RE = re.compile(rf"[{LETTERS}0-9]+(?:[-'’][{LETTERS}0-9]+)*")
 
 # ---------------------------------------------------------------- cleaning
 # Wiki leftovers: HTML tags (<br>, <templatestyles ...>), math/code placeholders
 # (formula_12, codice_3), URLs, HTML entities (&nbsp;) and stray [[ ]] {{ }}.
 MARKUP_RE = re.compile(r"<[^>]*>|\b(?:formula|codice)_\d+\b|https?://\S+|&[a-z]+;|\[\[|\]\]|\{\{|\}\}")
 TABLE_STARTS = ("{|", "|", "!")          # wikitable rows like  !rowspan="1" align="center"|Upuan
+APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'", "\u02bc": "'"})  # curly / modifier -> straight
 MIN_LETTER_SHARE = 0.6                   # below this the line is mostly symbols, IPA, formulas or another script
 TAGALOG_MARKERS = frozenset("ang ng sa na mga si ay at ni nang kay ito siya noong".split())
 MARKER_CHECK_WORDS = 6                   # long lines without any marker are another language
@@ -38,7 +36,7 @@ MARKER_CHECK_WORDS = 6                   # long lines without any marker are ano
 
 def clean_line(line):
     """Return the line with markup removed, or None if the line is junk."""
-    line = " ".join(MARKUP_RE.sub(" ", line).split())
+    line = " ".join(MARKUP_RE.sub(" ", line.translate(APOSTROPHES)).split())
     if not line or line.startswith(TABLE_STARTS):
         return None
     words = WORD_RE.findall(line)
@@ -53,11 +51,11 @@ def clean_line(line):
     return line
 
 
-def _iter_lines(path):
+def _iter_lines(path, clean=True):
     """Yield the cleaned, non-junk lines of a UTF-8 text file."""
     with open(path, encoding="utf-8", errors="ignore") as f:
         for raw in f:
-            line = clean_line(raw)
+            line = clean_line(raw) if clean else raw.rstrip("\n")
             if line:
                 yield line
 
@@ -89,11 +87,9 @@ def strip_accents(token):
     return "".join(out)
 
 
-def tokenize(text, lower=True, keep_hyphen=False, fold_accents=True):
-    rx = RUN_HYPHEN_RE if keep_hyphen else RUN_RE
+def tokenize(text, lower=True, keep_hyphen=True, fold_accents=True):
+    rx = WORD_HYPHEN_RE if keep_hyphen else WORD_RE
     for tok in rx.findall(text):
-        if any("0" <= ch <= "9" for ch in tok):
-            continue                     # mixed alphanumeric excluded
         if lower:
             tok = tok.lower()
         if fold_accents:
@@ -101,10 +97,10 @@ def tokenize(text, lower=True, keep_hyphen=False, fold_accents=True):
         yield tok
 
 
-def load_counts(path, lower=True, keep_hyphen=False, fold_accents=True):
+def load_counts(path, lower=True, keep_hyphen=True, fold_accents=True, clean=True):
     """Stream the (cleaned) input and return a Counter of tokens (raw corpus is never held in RAM)."""
     counts = Counter()
-    for line in _iter_lines(path):
+    for line in _iter_lines(path, clean):
         counts.update(tokenize(line, lower, keep_hyphen, fold_accents))
     return counts
 
@@ -149,6 +145,6 @@ if __name__ == "__main__":
 
     total, kept = clean_file(src, clean_path)
     print(f"[clean] kept {kept:,} of {total:,} lines -> {clean_path}")
-    counts = load_counts(clean_path)
+    counts = load_counts(clean_path, clean=False)
     write_counts_csv(counts, counts_path)
     print(f"[count] {sum(counts.values()):,} tokens, {len(counts):,} distinct words -> {counts_path}")
