@@ -20,12 +20,12 @@ def edit1_diff(a, b):
     a_chars/b_chars are "" for the empty side of an insertion/deletion."""
     if a == b or abs(len(a) - len(b)) > 1:
         return None
-    if len(a) == len(b):
+    if len(a) == len(b): # if same length, find the diff char
         i = next(k for k in range(len(a)) if a[k] != b[k])
         if a[i + 1:] != b[i + 1:]:
             return None
         kind, ca, cb, longer = "sub", a[i], b[i], a
-    else:
+    else: #if not same length, check the longer word and find the char that is not in the other
         s, l = (a, b) if len(a) < len(b) else (b, a)
         i = 0
         while i < len(s) and s[i] == l[i]:
