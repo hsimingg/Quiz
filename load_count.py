@@ -22,7 +22,9 @@ from pathlib import Path
 
 LETTERS = r"A-Za-zÀ-ÖØ-öø-ÿÑñ"
 WORD_RE = re.compile(rf"[{LETTERS}]+")
-WORD_HYPHEN_RE = re.compile(rf"[{LETTERS}]+(?:[-'’][{LETTERS}]+)*")
+# Counting tokenizers: a word must not touch a digit, so abc123 / TV5 / 1990s / km2 are dropped, not cut to abc / tv / km / s
+TOKEN_RE = re.compile(rf"(?<![\d{LETTERS}])[{LETTERS}]+(?![\d{LETTERS}])")
+TOKEN_HYPHEN_RE = re.compile(rf"(?<![\d{LETTERS}])[{LETTERS}]+(?:[-'’][{LETTERS}]+)*(?![\d{LETTERS}'’-])")
 
 # ---------------------------------------------------------------- cleaning
 # Wiki leftovers: HTML tags (<br>, <templatestyles ...>), math/code placeholders
@@ -88,8 +90,8 @@ def strip_accents(token):
     return "".join(out)
 
 
-def tokenize(text, lower=True, keep_hyphen=True, fold_accents=True):
-    rx = WORD_HYPHEN_RE if keep_hyphen else WORD_RE
+def tokenize(text, lower=True, keep_hyphen=True, fold_accents=False):
+    rx = TOKEN_HYPHEN_RE if keep_hyphen else TOKEN_RE
     for tok in rx.findall(text):
         if lower:
             tok = tok.lower()
@@ -98,7 +100,7 @@ def tokenize(text, lower=True, keep_hyphen=True, fold_accents=True):
         yield tok
 
 
-def load_counts(path, lower=True, keep_hyphen=True, fold_accents=True, clean=True):
+def load_counts(path, lower=True, keep_hyphen=True, fold_accents=False, clean=True):
     """Stream the (cleaned) input and return a Counter of tokens (raw corpus is never held in RAM)."""
     counts = Counter()
     for line in _iter_lines(path, clean):

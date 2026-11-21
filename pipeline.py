@@ -166,9 +166,9 @@ def main():
     ap.add_argument("--split-hyphen", dest="keep_hyphen", action="store_false",
                     help="split mag-aral and ma'am into parts (default keeps internal hyphens/apostrophes)")
     ap.set_defaults(keep_hyphen=True)
-    ap.add_argument("--keep-accents", dest="strip_accents", action="store_false",
-                    help="keep á, é ... as written (default folds á->a, ñ always kept; same as load_count.py)")
-    ap.set_defaults(strip_accents=True)
+    ap.add_argument("--strip-accents", dest="strip_accents", action="store_true",
+                    help="fold á->a (ñ always kept); default keeps accents as written, same as load_count.py")
+    ap.set_defaults(strip_accents=False)
     ap.add_argument("--min-count", type=int, default=3, help="ignore words rarer than this (3 keeps known positives)")
     ap.add_argument("--min-len", type=int, default=3, help="ignore words shorter than this")
     ap.add_argument("--stopwords", help="file with one word per line to ignore")
@@ -206,7 +206,7 @@ def main():
     t0 = time.perf_counter()
     if args.input.lower().endswith(".csv"):
         # word,count file from load_count.py: already tokenized, so --split-hyphen /
-        # --keep-accents do nothing here (rebuild the CSV to change them)
+        # --strip-accents do nothing here (rebuild the CSV to change them)
         counts = read_counts_csv(args.input)
     else:
         counts = load_counts(args.input, keep_hyphen=args.keep_hyphen, fold_accents=args.strip_accents)
