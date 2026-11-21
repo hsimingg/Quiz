@@ -1,150 +1,204 @@
-"""Template 1: load corpus -> clean -> tokenize -> normalize -> word frequency Counter.
+"""Template 5: rule-based variant matching (the paper's regex approach) + rule mining.
 
-Input is one UTF-8 .txt file (e.g. the Tagalog Wikipedia dump Raw.txt), streamed line by line.
+A Rule says: string X may alternate with string Y, optionally only in a context
+(left/right regex). A pair (a, b) matches a rule if changing ONE occurrence of X->Y
+(or Y->X) in a gives b.
 
-Run directly to write two files next to the input:
-  python load_count.py Raw.txt
-    -> Raw_clean.txt   the text with markup and gibberish lines removed
-    -> Raw_counts.csv  word,count (most frequent first), easy to open in Excel
+Rule sets - pick with pipeline.py --rules paper,hyphen,apostrophe
+  paper      : the professor's patterns (e/i, o/u, uw/w, iy/y in C/V contexts)
+  hyphen     : pag-ibig ~ pagibig.            Needs a tokenizer that KEEPS '-'
+  apostrophe : Tagalog contractions only: iba't ~ ibat, ito'y ~ itoy, sa'yo ~ sayo.
+               Needs a tokenizer that keeps "'" (keep_hyphen=True). Skips English
+               (don't, we'll, actor's) and names (d'italia).
+  loan       : Spanish/English loanword spellings (c/k, f/p, ñ/ny ...). OFF by default:
+               context-free f/p, j/h, z/s, v/b also pair English words (pan/fan, ham/jam)
+  loose      : context-free e/i, o/u, doubled vowels -> high recall, more false positives
 
-Tune after seeing the dataset:
-  - keep_hyphen   : keep "mag-aral" as one token (True) or split it (False)
-  - strip_accents : fold "pagbása" -> "pagbasa" (ñ is always kept)
-  - min_len       : drop very short tokens ("ng", "sa") from the vocabulary
+Reduplication (araw-araw, kagalang-galang) is grammatical, not spelling, and the paper excludes it.
+Pass skip_reduplicated=True to match_rule / rule_pairs to drop those pairs.
+
+Quiz-day workflow: run pipeline.py --mode edit --mine, look at the most frequent
+cdiff patterns, then add/remove rules here.   Self-test:  python rules.py
 """
-import csv
 import re
-import sys
-import unicodedata
 from collections import Counter
-from pathlib import Path
 
-LETTERS = r"A-Za-zÀ-ÖØ-öø-ÿÑñ"
-WORD_RE = re.compile(rf"[{LETTERS}]+")
-WORD_HYPHEN_RE = re.compile(rf"[{LETTERS}]+(?:[-'’][{LETTERS}]+)*")
-
-# ---------------------------------------------------------------- cleaning
-# Wiki leftovers: HTML tags (<br>, <templatestyles ...>), math/code placeholders
-# (formula_12, codice_3), URLs, HTML entities (&nbsp;) and stray [[ ]] {{ }}.
-MARKUP_RE = re.compile(r"<[^>]*>|\b(?:formula|codice)_\d+\b|https?://\S+|&[a-z]+;|\[\[|\]\]|\{\{|\}\}")
-TABLE_STARTS = ("{|", "|", "!")          # wikitable rows like  !rowspan="1" align="center"|Upuan
-APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'", "\u02bc": "'"})  # curly / modifier -> straight
-MIN_LETTER_SHARE = 0.6                   # below this the line is mostly symbols, IPA, formulas or another script
-TAGALOG_MARKERS = frozenset("ang ng sa na mga si ay at ni nang kay ito siya noong".split())
-MARKER_CHECK_WORDS = 6                   # long lines without any marker are another language
+C = "[bcdfghjklmnñpqrstvwxyz]"   # consonant: explicit letters, so '-' and "'" never count as one
+V = "[aeiou]"                    # vowel
 
 
-def clean_line(line):
-    """Return the line with markup removed, or None if the line is junk."""
-    line = " ".join(MARKUP_RE.sub(" ", line.translate(APOSTROPHES)).split())
-    if not line or line.startswith(TABLE_STARTS):
-        return None
-    words = WORD_RE.findall(line)
-    if not words:
-        return None                      # "2017", "1922:", " ],"
-    letters = sum(map(len, words))
-    others = sum(1 for c in line if not c.isspace() and not c.isdigit()) - letters  # digits are fine: years, dates
-    if letters / (letters + others) < MIN_LETTER_SHARE:
-        return None
-    if len(words) >= MARKER_CHECK_WORDS and not TAGALOG_MARKERS & {w.lower() for w in words}:
-        return None                      # language lists, Hawaiian/Polish examples, English-only lines
-    return line
+def is_reduplicated(word):
+    """Rough check for hyphenated reduplication: araw-araw, kagalang-galang, bahay-bahayan.
+    True if the two halves are equal, the left ends with the right, or the right starts with the left."""
+    parts = word.split("-")
+    if len(parts) != 2:
+        return False
+    a, b = parts
+    return a == b or a.endswith(b) or b.startswith(a)
 
 
-def _iter_lines(path, clean=True):
-    """Yield the cleaned, non-junk lines of a UTF-8 text file."""
-    with open(path, encoding="utf-8", errors="ignore") as f:
-        for raw in f:
-            line = clean_line(raw) if clean else raw.rstrip("\n")
-            if line:
-                yield line
+class Rule:
+    def __init__(self, name, x, y, left="", right="", not_right=""):
+        """x <-> y, only inside the given context.
+        left      : regex that must come right BEFORE the change (fixed width: Python lookbehind)
+        right     : regex that must come right AFTER the change
+        not_right : regex that must NOT come right after the change ('$' = word end)
+        y may be '' (x is just deleted); y -> x then inserts x wherever the context fits."""
+        if x == y:
+            raise ValueError(f"rule {name!r}: x and y are identical")
+        self.name, self.x, self.y = name, x, y
+        lb = f"(?<={left})" if left else ""
+        la = (f"(?={right})" if right else "") + (f"(?!{not_right})" if not_right else "")
+        self.fwd = re.compile(lb + re.escape(x) + la)   # x -> y
+        self.bwd = re.compile(lb + re.escape(y) + la)   # y -> x
+
+    def alternatives(self, word):
+        """Every word obtainable by applying this rule at exactly one spot."""
+        for rx, repl in ((self.fwd, self.y), (self.bwd, self.x)):
+            for m in rx.finditer(word):
+                yield word[:m.start()] + repl + word[m.end():]
+
+    def matches(self, a, b):
+        return any(alt == b for alt in self.alternatives(a))
+
+    def __repr__(self):
+        return f"Rule({self.name!r})"
 
 
-def clean_file(path, out_path):
-    """Write the cleaned text to out_path. Returns (lines_in, lines_kept)."""
-    total = kept = 0
-    with open(path, encoding="utf-8", errors="ignore") as f, \
-            open(out_path, "w", encoding="utf-8", newline="\n") as out:
-        for raw in f:
-            total += 1
-            line = clean_line(raw)
-            if line:
-                kept += 1
-                out.write(line + "\n")
-    return total, kept
+PAPER = [
+    Rule("e/i before hVC", "e", "i", right="h" + V + C),        # doblehin ~ doblihin
+    Rule("o/u before mC", "o", "u", right="m" + C),             # kompanya ~ kumpanya
+    Rule("uw/w after C before V", "uw", "w", left=C, right=V),  # kuwento ~ kwento
+    Rule("iy/y after C before V", "iy", "y", left=C, right=V),  # piyano ~ pyano
+]
+
+HYPHEN = [Rule("hyphen", "-", "")]                              # pag-ibig ~ pagibig
+APOSTROPHE = [
+    Rule("apostrophe 't", "'", "", left=V, right="t$"),    # iba't ~ ibat, bagama't ~ bagamat
+    Rule("apostrophe 'y", "'", "", left=V, right="y$"),    # ito'y ~ itoy, siya'y ~ siyay
+    Rule("apostrophe 'yo", "'", "", left=V, right="yo$"),  # sa'yo ~ sayo
+]
+
+LOAN = [
+    Rule("c/k before a,o,u", "c", "k", right="[aou]"),       # carne ~ karne
+    Rule("c/s before e,i", "c", "s", right="[ei]"),          # centro ~ sentro
+    Rule("qu/k before e,i", "qu", "k", right="[ei]"),        # queso ~ keso
+    Rule("f/p", "f", "p"),                                   # familya ~ pamilya
+    Rule("v/b", "v", "b"),                                   # vaso ~ baso
+    Rule("j/h", "j", "h"),                                   # jamon ~ hamon
+    Rule("z/s", "z", "s"),                                   # zapatos ~ sapatos
+    Rule("ll/ly before V", "ll", "ly", right=V),             # calle ~ calye
+    Rule("ñ/ny", "ñ", "ny"),                                 # señor ~ senyor
+    Rule("x/ks", "x", "ks"),                                 # taxi ~ taksi
+    Rule("ch/ts", "ch", "ts"),                               # chinelas ~ tsinelas
+]
+
+LOOSE = [
+    Rule("e/i (any)", "e", "i"),                             # pare ~ pari (careful!)
+    Rule("o/u (any)", "o", "u"),                             # opo ~ upo  (careful!)
+] + [Rule(f"{v}{v}/{v}", v + v, v) for v in "aeiou"]       # maaari ~ maari
+
+RULE_SETS = {"paper": PAPER, "hyphen": HYPHEN, "apostrophe": APOSTROPHE, "loan": LOAN, "loose": LOOSE}
+DEFAULT_RULES = PAPER          # the rest are opt-in
 
 
-# ---------------------------------------------------------------- counting
-def strip_accents(token):
-    """Remove accent marks but keep ñ (a separate letter in Filipino)."""
+def get_rules(spec="paper"):
     out = []
-    for ch in token:
-        if ch in "ñÑ":
-            out.append(ch)
-        else:
-            out.append("".join(c for c in unicodedata.normalize("NFD", ch)
-                               if unicodedata.category(c) != "Mn"))
-    return "".join(out)
+    for name in spec.split(","):
+        name = name.strip()
+        if not name:
+            continue
+        if name not in RULE_SETS:
+            raise ValueError(f"unknown rule set {name!r}; choose from {sorted(RULE_SETS)}")
+        out.extend(RULE_SETS[name])
+    return out
 
 
-def tokenize(text, lower=True, keep_hyphen=True, fold_accents=True):
-    rx = WORD_HYPHEN_RE if keep_hyphen else WORD_RE
-    for tok in rx.findall(text):
-        if lower:
-            tok = tok.lower()
-        if fold_accents:
-            tok = strip_accents(tok)
-        yield tok
+def match_rule(a, b, rules=DEFAULT_RULES, skip_reduplicated=False):
+    """Name of the first rule that turns a into b (either direction), else None.
+    skip_reduplicated=True ignores pairs where either word is a hyphenated reduplication."""
+    if skip_reduplicated and (is_reduplicated(a) or is_reduplicated(b)):
+        return None
+    for r in rules:
+        if r.matches(a, b):
+            return r.name
+    return None
 
 
-def load_counts(path, lower=True, keep_hyphen=True, fold_accents=True, clean=True):
-    """Stream the (cleaned) input and return a Counter of tokens (raw corpus is never held in RAM)."""
-    counts = Counter()
-    for line in _iter_lines(path, clean):
-        counts.update(tokenize(line, lower, keep_hyphen, fold_accents))
-    return counts
+def rule_pairs(vocab, rules=DEFAULT_RULES, skip_reduplicated=False):
+    """Rule-driven extraction, O(n * L): generate each word's alternatives and look them
+    up in the vocabulary. Finds rule pairs at ANY edit distance (e.g. ñ/ny = 2 edits).
+    skip_reduplicated=True drops pairs involving hyphenated reduplications (araw-araw)."""
+    vocab = set(vocab)
+    found = {}
+    for w in vocab:
+        if skip_reduplicated and is_reduplicated(w):
+            continue
+        for r in rules:
+            for alt in r.alternatives(w):
+                if alt != w and alt in vocab and not (skip_reduplicated and is_reduplicated(alt)):
+                    found.setdefault(tuple(sorted((w, alt))), r.name)
+    return found
 
 
-def write_counts_csv(counts, out_path, encoding="utf-8-sig"):
-    """word,count sorted by count (ties alphabetical). utf-8-sig so Excel shows ñ/á correctly."""
-    with open(out_path, "w", encoding=encoding, newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["word", "count"])
-        w.writerows(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+def _gen(s):
+    """Generalize a context: vowel -> V, other letter -> C, word edge -> #, '-' and "'" stay."""
+    return "".join("V" if c in "aeiou" else "#" if c in "^$" else "C" if c.isalpha() else c for c in s)
 
 
-def filter_vocab(counts, min_count=1, min_len=3, stopwords=frozenset()):
-    """Vocabulary used for pairing. Counts stay global (use the full Counter for output)."""
-    return {w: c for w, c in counts.items()
-            if c >= min_count and len(w) >= min_len and w not in stopwords}
+def mine_patterns(pairs, top=40, width=1):
+    """Tally the edit pattern of each pair as  left-context [x->y] right-context
+    (contexts generalized to C/V, '#' = word edge). Use it to discover rules."""
+    from levenshtein import levenshtein
+    tally, examples = Counter(), {}
+    for a, b in pairs:
+        _, ops = levenshtein(a, b)
+        if len(ops) != 1:
+            continue
+        kind, ca, cb, i = ops[0]
+        end = i if kind == "ins" else i + 1
+        left = ("^" * width + a)[i: i + width]
+        right = (a + "$" * width)[end: end + width]
+        key = f"{_gen(left)}[{ca or '∅'}->{cb or '∅'}]{_gen(right)}"
+        # canonical direction so e->i and i->e are counted together
+        rev = f"{_gen(left)}[{cb or '∅'}->{ca or '∅'}]{_gen(right)}"
+        key = min(key, rev)
+        tally[key] += 1
+        examples.setdefault(key, f"{a}~{b}")
+    return [(k, n, examples[k]) for k, n in tally.most_common(top)]
 
-
-def load_stopwords(path):
-    if not path:
-        return frozenset()
-    with open(path, encoding="utf-8", errors="ignore") as f:
-        return frozenset(line.strip().lower() for line in f if line.strip())
-
-
-# backwards-compatible names from the first draft
-def load_words(path, lower=True, encoding="utf-8"):
-    with open(path, encoding=encoding, errors="ignore") as f:
-        return [t for line in f for t in tokenize(line, lower)]
-
-
-def count_words(words, min_len=3, stopwords=frozenset()):
-    return Counter(w for w in words if len(w) >= min_len and w not in stopwords)
-
-
+##just a test for the rules, we can remove it for the actual code
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        sys.exit("usage: python load_count.py Raw.txt")
-    src = Path(sys.argv[1])
-    clean_path = src.with_name(src.stem + "_clean.txt")
-    counts_path = src.with_name(src.stem + "_counts.csv")
-
-    total, kept = clean_file(src, clean_path)
-    print(f"[clean] kept {kept:,} of {total:,} lines -> {clean_path}")
-    counts = load_counts(clean_path, clean=False)
-    write_counts_csv(counts, counts_path)
-    print(f"[count] {sum(counts.values()):,} tokens, {len(counts):,} distinct words -> {counts_path}")
+    P = get_rules("paper")
+    for a, b in [("kompanya", "kumpanya"), ("doblehin", "doblihin"), ("kuwento", "kwento"),
+                 ("piyano", "pyano"), ("ahensiya", "ahensya"), ("lenggwahe", "lengguwahe")]:
+        assert match_rule(a, b, P), (a, b)
+    for a, b in [("opo", "upo"), ("pare", "pari"), ("madikit", "marikit"),
+                 ("pauwi", "pawi"), ("paiyak", "payak"), ("kom-panya", "kum-panya")]:
+        assert match_rule(a, b, P) is None, (a, b)          # non-variants / punctuation not a consonant
+    assert match_rule("pag-ibig", "pagibig", P) is None     # punctuation rules are opt-in
+    assert match_rule("pag-ibig", "pagibig", get_rules("hyphen")) == "hyphen"
+    A = get_rules("apostrophe")
+    for a, b, name in [("iba't", "ibat", "apostrophe 't"), ("bagama't", "bagamat", "apostrophe 't"),
+                       ("ito'y", "itoy", "apostrophe 'y"), ("sa'yo", "sayo", "apostrophe 'yo")]:
+        assert match_rule(a, b, A) == name, (a, b)
+    for a, b in [("actor's", "actors"), ("don't", "dont"), ("we'll", "well"), ("i'm", "im"),
+                 ("we're", "were"), ("d'italia", "ditalia"), ("na'ng", "nang"), ("ito'ng", "itong")]:
+        assert match_rule(a, b, A) is None, (a, b)          # English, names, 'ng (nang/itong are real words)
+    assert match_rule("carne", "karne", get_rules("loan")) == "c/k before a,o,u"
+    assert match_rule("señor", "senyor", get_rules("loan")) == "ñ/ny"
+    assert rule_pairs(["pag-ibig", "pagibig", "sayo", "sa'yo", "opo", "upo"], get_rules("hyphen,apostrophe")) == \
+        {("pag-ibig", "pagibig"): "hyphen", ("sa'yo", "sayo"): "apostrophe 'yo"}
+    assert is_reduplicated("araw-araw") and is_reduplicated("kagalang-galang") and is_reduplicated("bahay-bahayan")
+    assert not is_reduplicated("pag-ibig") and not is_reduplicated("mag-rekord") and not is_reduplicated("kumpanya")
+    H = get_rules("hyphen")
+    assert match_rule("kagalang-galang", "kagalanggalang", H) == "hyphen"
+    assert match_rule("kagalang-galang", "kagalanggalang", H, skip_reduplicated=True) is None
+    assert match_rule("pag-ibig", "pagibig", H, skip_reduplicated=True) == "hyphen"
+    assert rule_pairs(["kagalang-galang", "kagalanggalang", "pag-ibig", "pagibig"], H, skip_reduplicated=True) == \
+        {("pag-ibig", "pagibig"): "hyphen"}
+    try:
+        get_rules("papr"); raise SystemExit("typo should have raised")
+    except ValueError:
+        pass
+    print("all rule tests passed")
