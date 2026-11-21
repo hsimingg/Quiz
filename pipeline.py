@@ -17,7 +17,6 @@ Typical quiz-day runs
   python pipeline.py data.txt -o Variants.csv               # rules mode (default: paper rules), edit distance 1
   python pipeline.py data.txt --rules paper,loan            # add loanword rules if the data has them
   python pipeline.py data.txt --max-edits 2 --rules paper,loan,loose --extra
-  python pipeline.py data.csv --csv-column text -o Variants.csv
   python pipeline.py corpus_dir/ --groups groups.csv --features features.csv
 """
 import argparse
@@ -57,9 +56,11 @@ def timed(label):
 
 @timed("find_variants")
 def find_variants(counts, vocab, max_edits=1, mode="rules", rules=None,
-                  min_ngram=0.0, order="freq", max_bucket=3000, adhere_min=61.0):
+                  min_ngram=0.0, order="freq", min_key_len=2, max_bucket=3000, adhere_min=61.0):
     rules = rules if rules is not None else get_rules("paper")
-    cands = candidate_pairs(vocab, max_edits, max_bucket=max_bucket)
+    stats = {}
+    cands = candidate_pairs(vocab, max_edits, min_key_len, max_bucket, stats)
+    log(f"[candidates] {stats}")
     rp = rule_pairs(vocab, rules) if (mode == "rules" and rules) else {}
     log(f"[find_variants] vocab={len(vocab)} candidates={len(cands)} rule-generated={len(rp)}")
 
@@ -149,18 +150,17 @@ def demo():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("input", nargs="?", help="text file, CSV/TSV file (with --csv-column) or directory")
+    ap.add_argument("input", nargs="?", help="text file (Raw.txt)")
     ap.add_argument("-o", "--output", default="Variants.csv")
     ap.add_argument("--demo", action="store_true")
     # input / normalization
-    ap.add_argument("--csv-column", help="text column if the input is CSV/TSV")
-    ap.add_argument("--delimiter", default=",", help="use '\\t' for TSV")
     ap.add_argument("--keep-hyphen", action="store_true", help="keep mag-aral as one token")
     ap.add_argument("--strip-accents", action="store_true", help="fold á->a (ñ kept)")
     ap.add_argument("--min-count", type=int, default=1, help="ignore words rarer than this")
     ap.add_argument("--min-len", type=int, default=3, help="ignore words shorter than this")
     ap.add_argument("--stopwords", help="file with one word per line to ignore")
     # algorithm
+    ap.add_argument("--min-key-len", type=int, default=2)
     ap.add_argument("--max-edits", type=int, choices=[1, 2], default=1)
     ap.add_argument("--mode", choices=["rules", "edit"], default="rules",
                     help="rules = only rule-explained pairs (precision); edit = every pair within --max-edits (recall)")
@@ -184,15 +184,13 @@ def main():
         ap.error("input is required (or use --demo)")
 
     t0 = time.perf_counter()
-    delim = "\t" if args.delimiter in ("\\t", "tab") else args.delimiter
-    counts = load_counts(args.input, keep_hyphen=args.keep_hyphen, fold_accents=args.strip_accents,
-                         csv_column=args.csv_column, delimiter=delim)
+    counts = load_counts(args.input, keep_hyphen=args.keep_hyphen, fold_accents=args.strip_accents)
     vocab = filter_vocab(counts, args.min_count, args.min_len, load_stopwords(args.stopwords))
     log(f"[load] tokens={sum(counts.values())} types={len(counts)} vocab_used={len(vocab)} "
         f"({time.perf_counter() - t0:.2f}s)")
 
     rows = find_variants(counts, vocab, args.max_edits, args.mode, get_rules(args.rules),
-                         args.min_ngram, args.order, args.max_bucket, args.adhere_min)
+                         args.min_ngram, args.order, args.min_key_len, args.max_bucket, args.adhere_min)
     write_csv(rows, args.output, REQUIRED + (EXTRA if args.extra else []), args.encoding)
     log(f"[done] {len(rows)} pairs -> {args.output}")
 

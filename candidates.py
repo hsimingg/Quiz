@@ -38,7 +38,7 @@ def candidate_pairs(vocab, max_edits=1, min_key_len=2, max_bucket=3000, stats=No
             if len(key) >= min_key_len:
                 index[key].append(w)
 
-    pairs, skipped, skipped_words = set(), 0
+    pairs, skipped, skipped_words = set(), 0, 0
     for ws in index.values():
         if len(ws) < 2:
             continue
