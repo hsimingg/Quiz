@@ -8,7 +8,8 @@ Run directly to write two files next to the input:
     -> Raw_counts.csv  word,count (most frequent first), easy to open in Excel
 
 Tune after seeing the dataset:
-  - keep_hyphen   : keep "mag-aral" as one token (True) or split it (False)
+  - keep_hyphen   : keep "mag-aral" and "iba't" as one token (True) or split them (False).
+                    Covers apostrophes too; the hyphen/apostrophe rules need True.
   - strip_accents : fold "pagbása" -> "pagbasa" (ñ is always kept)
   - min_len       : drop very short tokens ("ng", "sa") from the vocabulary
 """
