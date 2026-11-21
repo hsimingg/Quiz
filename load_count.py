@@ -93,6 +93,15 @@ LOAN = [
     Rule("ch/ts", "ch", "ts"),                               # chinelas ~ tsinelas
 ]
 
+LOAN_SAFE = [
+    Rule("c/k before a,o,u", "c", "k", right="[aou]"),       # carne ~ karne
+    Rule("qu/k before e,i", "qu", "k", right="[ei]"),        # queso ~ keso
+    Rule("ll/ly before V", "ll", "ly", right=V),             # calle ~ calye
+    Rule("ñ/ny", "ñ", "ny"),                                 # señor ~ senyor
+    Rule("x/ks", "x", "ks"),                                 # taxi ~ taksi
+    Rule("ch/ts", "ch", "ts"),                               # chinelas ~ tsinelas
+]
+
 LOOSE = [
     Rule("e/i (any)", "e", "i"),                             # pare ~ pari (careful!)
     Rule("o/u (any)", "o", "u"),                             # opo ~ upo  (careful!)
