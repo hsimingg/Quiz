@@ -154,9 +154,11 @@ def main():
     ap.add_argument("-o", "--output", default="Variants.csv")
     ap.add_argument("--demo", action="store_true")
     # input / normalization
-    ap.add_argument("--keep-hyphen", action="store_true", help="keep mag-aral as one token")
+    ap.add_argument("--split-hyphen", dest="keep_hyphen", action="store_false",
+                    help="split mag-aral and ma'am into parts (default keeps internal hyphens/apostrophes)")
+    ap.set_defaults(keep_hyphen=True)
     ap.add_argument("--strip-accents", action="store_true", help="fold á->a (ñ kept)")
-    ap.add_argument("--min-count", type=int, default=1, help="ignore words rarer than this")
+    ap.add_argument("--min-count", type=int, default=3, help="ignore words rarer than this (3 keeps known positives)")
     ap.add_argument("--min-len", type=int, default=3, help="ignore words shorter than this")
     ap.add_argument("--stopwords", help="file with one word per line to ignore")
     # algorithm

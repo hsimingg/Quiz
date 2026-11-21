@@ -22,6 +22,9 @@ from pathlib import Path
 LETTERS = r"A-Za-zÀ-ÖØ-öø-ÿÑñ"
 WORD_RE = re.compile(rf"[{LETTERS}]+")
 WORD_HYPHEN_RE = re.compile(rf"[{LETTERS}]+(?:[-'’][{LETTERS}]+)*")
+# Whole alphanumeric drops
+RUN_RE = re.compile(rf"[{LETTERS}0-9]+")
+RUN_HYPHEN_RE = re.compile(rf"[{LETTERS}0-9]+(?:[-'’][{LETTERS}0-9]+)*")
 
 # ---------------------------------------------------------------- cleaning
 # Wiki leftovers: HTML tags (<br>, <templatestyles ...>), math/code placeholders
@@ -87,8 +90,10 @@ def strip_accents(token):
 
 
 def tokenize(text, lower=True, keep_hyphen=False, fold_accents=True):
-    rx = WORD_HYPHEN_RE if keep_hyphen else WORD_RE
+    rx = RUN_HYPHEN_RE if keep_hyphen else RUN_RE
     for tok in rx.findall(text):
+        if any("0" <= ch <= "9" for ch in tok):
+            continue                     # mixed alphanumeric excluded
         if lower:
             tok = tok.lower()
         if fold_accents:
