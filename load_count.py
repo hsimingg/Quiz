@@ -9,7 +9,7 @@ Run directly to write two files next to the input:
 
 Tune after seeing the dataset:
   - keep_hyphen   : keep "mag-aral" and "iba't" as one token (True) or split them (False).
-                    Covers apostrophes too; the hyphen/apostrophe rules need True.
+                    Covers apostrophes too.
   - strip_accents : fold "pagbása" -> "pagbasa" (ñ is always kept)
   - min_len       : drop very short tokens ("ng", "sa") from the vocabulary
 """
@@ -22,9 +22,7 @@ from pathlib import Path
 
 LETTERS = r"A-Za-zÀ-ÖØ-öø-ÿÑñ"
 WORD_RE = re.compile(rf"[{LETTERS}]+")
-# Counting tokenizers: a word must not touch a digit, so abc123 / TV5 / 1990s / km2 are dropped, not cut to abc / tv / km / s
-TOKEN_RE = re.compile(rf"(?<![\d{LETTERS}])[{LETTERS}]+(?![\d{LETTERS}])")
-TOKEN_HYPHEN_RE = re.compile(rf"(?<![\d{LETTERS}])[{LETTERS}]+(?:[-'’][{LETTERS}]+)*(?![\d{LETTERS}'’-])")
+WORD_HYPHEN_RE = re.compile(rf"[{LETTERS}]+(?:[-'’][{LETTERS}]+)*")
 
 # ---------------------------------------------------------------- cleaning
 # Wiki leftovers: HTML tags (<br>, <templatestyles ...>), math/code placeholders
@@ -90,8 +88,8 @@ def strip_accents(token):
     return "".join(out)
 
 
-def tokenize(text, lower=True, keep_hyphen=True, fold_accents=False):
-    rx = TOKEN_HYPHEN_RE if keep_hyphen else TOKEN_RE
+def tokenize(text, lower=True, keep_hyphen=True, fold_accents=True):
+    rx = WORD_HYPHEN_RE if keep_hyphen else WORD_RE
     for tok in rx.findall(text):
         if lower:
             tok = tok.lower()
@@ -100,7 +98,7 @@ def tokenize(text, lower=True, keep_hyphen=True, fold_accents=False):
         yield tok
 
 
-def load_counts(path, lower=True, keep_hyphen=True, fold_accents=False, clean=True):
+def load_counts(path, lower=True, keep_hyphen=True, fold_accents=True, clean=True):
     """Stream the (cleaned) input and return a Counter of tokens (raw corpus is never held in RAM)."""
     counts = Counter()
     for line in _iter_lines(path, clean):
@@ -121,16 +119,9 @@ def read_counts_csv(path, encoding="utf-8-sig"):
         next(r, None)                                   # skip header
         return Counter({w: int(n) for w, n in r})
 
-def filter_vocab(counts, min_count=1, min_len=3, stopwords=frozenset()):
+def filter_vocab(counts, min_count=1, min_len=3):
     """Vocabulary used for pairing. Counts stay global (use the full Counter for output)."""
-    return {w: c for w, c in counts.items()
-            if c >= min_count and len(w) >= min_len and w not in stopwords}
-
-def load_stopwords(path):
-    if not path:
-        return frozenset()
-    with open(path, encoding="utf-8", errors="ignore") as f:
-        return frozenset(line.strip().lower() for line in f if line.strip())
+    return {w: c for w, c in counts.items() if c >= min_count and len(w) >= min_len}
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:

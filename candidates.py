@@ -57,19 +57,3 @@ def candidate_pairs(vocab, max_edits=1, min_key_len=2, max_bucket=3000, stats=No
         print(f"{skipped_words} word entries affected", file=sys.stderr)
     return pairs
 
-""" not need for now
-def length_buckets(vocab):
-    Simpler divide step (what templates 01-05 used): group by length.
-    Only compare buckets L and L±k. Still O(n^2) inside a bucket - use for small vocabularies.
-    b = defaultdict(list)
-    for w in vocab:
-        b[len(w)].append(w)
-    return b
-"""
-
-
-def brute_force_pairs(vocab, max_edits, distance_fn):
-    """O(n^2) reference used only for testing on small vocabularies."""
-    ws = sorted(set(vocab))
-    return {(a, b) for i, a in enumerate(ws) for b in ws[i + 1:]
-            if 0 < distance_fn(a, b) <= max_edits}

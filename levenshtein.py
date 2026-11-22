@@ -1,13 +1,15 @@
-"""Template 4 (Dynamic Programming): Levenshtein distance, bounded version, traceback,
-and the character_difference string built from the ACTUAL alignment.
+"""Levenshtein (edit distance) + the character_difference column ("o vs. u").
 
-Why traceback matters: comparing letter-by-letter at the same index (what most of
-templates 01-10 did) breaks after an insertion/deletion:
-    kuwento vs kwento -> positional: "u vs. w; w vs. e; e vs. n; ..."   (wrong)
-                      -> traceback : "u vs. ∅"                           (right)
+bounded_levenshtein : fast "is the distance <= k?" check, used by edit mode for --max-edits 2.
+character_difference: aligns the two words and reads off what changed.
+
+Comparing letter-by-letter at the same position breaks when one word is longer:
+    kuwento vs kwento -> same-position: "u vs. w; w vs. e; e vs. n; ..."   (wrong)
+                      -> aligned      : "u vs. ∅"                           (right)
+So we use the Levenshtein table to find the real alignment, then read the edits back.
 """
 
-EMPTY = "∅"
+EMPTY = "∅"   # shown when a letter exists in one word but not the other
 
 
 def levenshtein(a, b):
@@ -22,6 +24,7 @@ def levenshtein(a, b):
         for j in range(1, m + 1):
             cost = 0 if a[i - 1] == b[j - 1] else 1
             d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost)
+    # walk back from the bottom-right corner to recover which edits were made
     ops, i, j = [], n, m
     while i > 0 or j > 0:
         if i > 0 and j > 0 and d[i][j] == d[i - 1][j - 1] + (a[i - 1] != b[j - 1]):
@@ -36,19 +39,6 @@ def levenshtein(a, b):
             ops.append(("ins", "", b[j - 1], i))
             j -= 1
     return d[n][m], ops[::-1]
-
-
-def distance(a, b):
-    """Plain distance, two-row DP (O(min memory))."""
-    if len(a) < len(b):
-        a, b = b, a
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a, 1):
-        cur = [i]
-        for j, cb in enumerate(b, 1):
-            cur.append(min(cur[-1] + 1, prev[j] + 1, prev[j - 1] + (ca != cb)))
-        prev = cur
-    return prev[-1]
 
 
 def bounded_levenshtein(a, b, k):
@@ -67,32 +57,23 @@ def bounded_levenshtein(a, b, k):
 
 
 def group_ops(ops):
-    """Merge adjacent edits into one chunk so 'ñ' vs 'ny' reads as one difference."""
+    """Merge edits that sit next to each other, so 'ñ' vs 'ny' reads as one difference."""
     groups = []
     for kind, ca, cb, idx in ops:
-        end = idx + (0 if kind == "ins" else 1)      # ins does not consume a char of a
-        if groups and idx == groups[-1]["end"]:      # touches the previous chunk
+        end = idx + (0 if kind == "ins" else 1)
+        if groups and idx == groups[-1]["end"]:
             g = groups[-1]
             g["a"] += ca
             g["b"] += cb
             g["end"] = end
         else:
-            groups.append({"a": ca, "b": cb, "start": idx, "end": end})
+            groups.append({"a": ca, "b": cb, "end": end})
     return groups
 
 
-def character_difference(a, b, sep="; ", empty=EMPTY, merge_adjacent=True):
+def character_difference(a, b):
     """'x vs. y' for every difference, read from word a to word b."""
     _, ops = levenshtein(a, b)
     if not ops:
         return "none"
-    if merge_adjacent:
-        parts = [(g["a"] or empty, g["b"] or empty) for g in group_ops(ops)]
-    else:
-        parts = [(ca or empty, cb or empty) for _, ca, cb, _ in ops]
-    return sep.join(f"{x} vs. {y}" for x, y in parts)
-
-
-def first_diff_index(a, b):
-    _, ops = levenshtein(a, b)
-    return ops[0][3] if ops else -1
+    return "; ".join(f"{g['a'] or EMPTY} vs. {g['b'] or EMPTY}" for g in group_ops(ops))
