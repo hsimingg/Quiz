@@ -84,7 +84,11 @@ def demo():
     counts = Counter({"politiko": 435, "pulitiko": 1093, "kompanya": 51, "kumpanya": 49,
                       "kuwento": 20, "kwento": 80, "opo": 90, "upo": 30, "bata": 70, "bato": 30,
                       "pag-ibig": 799, "pagibig": 14, "iba't": 6105, "ibat": 172,
-                      "sagot": 900, "sago't": 5, "araw-araw": 500, "arawaraw": 3})
+                      "sagot": 900, "sago't": 5, "araw-araw": 500, "arawaraw": 3,
+                      "kristo": 300, "cristo": 20, "luson": 15, "luzon": 400,
+                      "pilipinas": 900, "filipinas": 40, "unibersidad": 500, "universidad": 60,
+                      "intervention": 10, "intervensyon": 12, "pansarili": 200, "pangsarili": 30,
+                      "fan": 50, "pan": 40})
     rows = find_variants(counts, filter_vocab(counts))
     for r in rows:
         print(r)
@@ -97,6 +101,11 @@ def demo():
     assert ("pag-ibig", "pagibig") in pairs and ("iba't", "ibat") in pairs
     assert ("sago't", "sagot") not in pairs                 # plain form more common -> not a contraction
     assert ("araw-araw", "arawaraw") not in pairs           # reduplication skipped
+    for pair in [("cristo", "kristo"), ("luson", "luzon"), ("filipinas", "pilipinas"),
+                 ("unibersidad", "universidad"), ("intervensyon", "intervention"),
+                 ("pangsarili", "pansarili"), ("manika", "manyika")]:
+        assert pair in pairs, pair                          # new safe rules
+    assert ("fan", "pan") not in pairs                      # too short for f/p (English)
 
     edit_rows = find_variants(counts, filter_vocab(counts), mode="edit", max_edits=1)
     edit_found = {(r["word1"], r["word2"]) for r in edit_rows}
